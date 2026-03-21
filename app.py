@@ -49,17 +49,17 @@ def save_scheme_to_file(scheme_data):
     return filepath
 
 def load_schemes():
-    """加载所有已保存的方案"""
+    """加载所有已保存的方案，同时返回文件名"""
     ensure_schemes_dir()
     schemes = []
     for filepath in glob.glob(os.path.join(SCHEMES_DIR, "*.json")):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                data["filename"] = os.path.basename(filepath)
                 schemes.append(data)
         except Exception as e:
             st.warning(f"无法加载方案 {filepath}: {e}")
-    # 按时间戳排序，最新的在前
     schemes.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return schemes
 
@@ -849,14 +849,14 @@ def main():
         """
     <style>
     .main-header {
-        font-size: 2.2rem;
-        font-weight: bold;
-        color: #1E88E5;
-        text-align: center;
-        margin-bottom: 1.5rem;
-        padding-bottom: 0.8rem;
-        border-bottom: 3px solid #1E88E5;
-    }
+    font-size: 2.1rem !important;   /* 比原来的2.2rem略大，也可改为3rem等 */
+    font-weight: bold;
+    color: #1E88E5;
+    text-align: center;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.8rem;
+    border-bottom: 3px solid #1E88E5;
+}
     .sub-header {
         font-size: 1.1rem;
         font-weight: bold;
@@ -878,6 +878,23 @@ def main():
         border-left: 4px solid #2196F3;
         font-size: 0.9rem;
     }
+    /* 方案管理卡片 */
+.schemes-card {
+    background-color: #F0F7FF;
+    padding: 1rem 1rem 0.5rem 1rem;
+    border-radius: 0.5rem;
+    border-left: 4px solid #2196F3;
+    margin-bottom: 1rem;
+}
+.schemes-card h4 {
+    margin-top: 0;
+    margin-bottom: 0.5rem;
+    color: #0B5E7E;
+}
+/* 方案列表项之间的分隔线样式 */
+div[data-testid="stVerticalBlock"] > div:has(hr) {
+    margin: 0.5rem 0;
+}
     div[data-testid="stMetricValue"] {
         font-size: 1.2rem !important;
     }
@@ -890,6 +907,7 @@ def main():
     div[data-testid="column"] {
         padding: 0 0.5rem;
     }
+    
     </style>
     """,
         unsafe_allow_html=True,
@@ -977,695 +995,218 @@ def main():
 
     # 根据模式显示主要内容
     if mode == "热载荷计算":
-        # 如果文件未上传，显示提示
+        # 如果文件未上传，显示方案管理界面
         if not beta_file or not cp_file:
+            # 统一的欢迎和引导卡片
             st.markdown(
                 """
                 <div class="info-box">
-                    <h4>👋 欢迎使用</h4>
+                    <h5>👋 欢迎使用</h5>
                     <p>请在左侧上传 <b>Beta</b> 和 <b>Cp</b> 数据文件，然后设置参数，点击计算按钮开始分析。</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+
+            schemes = load_schemes()
+            if not schemes:
+                st.info("暂无保存的方案。请上传文件并完成计算后保存方案。")
+            else:
+                # 方案管理卡片
+                st.markdown(
+                    """
+                    <div class="schemes-card">
+                        <h6>📁 已保存的分区方案</h6>
+                        <p style="margin-bottom: 1rem;">您可以直接删除不需要的方案，或继续上传文件进行计算。</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                # 构建方案列表
+                for i, s in enumerate(schemes):
+                    with st.container():
+                        col1, col2, col3, col4, col5, col6 = st.columns([2.5, 1.5, 1.2, 1.8, 2.5, 0.6])
+                        with col1:
+                            st.markdown(f"**{s['name']}**")
+                        with col2:
+                            st.write(f"{s['wing_span']} m")
+                        with col3:
+                            st.write(s['scheme_type'])
+                        with col4:
+                            st.write(s['timestamp'][:19])
+                        with col5:
+                            widths_str = ", ".join([f"{k}:{v:.0f}" for k, v in s['widths'].items() if v > 0])
+                            st.write(widths_str)
+                        with col6:
+                            if st.button("🗑️", key=f"del_{i}", help="删除此方案"):
+                                filepath = os.path.join(SCHEMES_DIR, s["filename"])
+                                os.remove(filepath)
+                                st.success(f"方案「{s['name']}」已删除")
+                                st.rerun()
+                        st.markdown("---")
+
+            # 无需重复的“上传文件”提示，欢迎消息已包含
             return
-
-        # 文件已上传，解析数据（仅在需要时解析）
-        try:
-            beta_content = beta_file.getvalue().decode("utf-8")
-            cp_content = cp_file.getvalue().decode("utf-8")
-
-            beta_df = parse_beta_from_string(beta_content)
-            cp_df = parse_cp_from_string(cp_content)
-
-            with st.expander(
-                    f"📈 数据加载成功 - Beta: {len(beta_df)} 点, Cp: {len(cp_df)} 点",
-                    expanded=True,
-            ):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Beta 数据预览**")
-                    st.dataframe(beta_df.head(10), use_container_width=True)
-                with col2:
-                    st.write("**Cp 数据预览**")
-                    st.dataframe(cp_df.head(10), use_container_width=True)
-        except Exception as e:
-            st.error(f"❌ 文件解析错误: {str(e)}")
-            return
-
-        # 计算按钮触发
-        if calculate_btn:
-            with st.spinner("🧮 正在进行热载荷计算..."):
-                try:
-                    beta_df, origin_idx = shift_origin(beta_df)
-                    cp_df, _ = shift_origin(cp_df)
-
-                    from scipy.spatial import KDTree
-
-                    tree = KDTree(cp_df[["x", "z"]])
-                    _, idx = tree.query(beta_df[["x", "z"]])
-                    matched_df = beta_df.copy()
-                    matched_df["cp"] = cp_df.iloc[idx]["cp"].values
-
-                    upper, lower = split_surfaces_by_order(matched_df, origin_idx)
-
-                    upper_calc = compute_surface(
-                        upper, V_inf, T_inf, T_wall, H_alt, LWC, "upper"
-                    )
-                    lower_calc = compute_surface(
-                        lower, V_inf, T_inf, T_wall, H_alt, LWC, "lower"
-                    )
-
-                    hydro_df, non_hydro_df = extract_summary_data(upper_calc, lower_calc)
-                    hydro_zones, non_hydro_zones = calculate_zones(hydro_df, non_hydro_df)
-
-                    st.session_state.results = {
-                        "upper_calc": upper_calc,
-                        "lower_calc": lower_calc,
-                        "hydro_df": hydro_df,
-                        "non_hydro_df": non_hydro_df,
-                        "hydro_zones": hydro_zones,
-                        "non_hydro_zones": non_hydro_zones,
-                        "params": {
-                            "V_inf": V_inf,
-                            "T_inf": T_inf,
-                            "T_wall": T_wall,
-                            "H_alt": H_alt,
-                            "LWC": LWC,
-                            "wing_span": wing_span,
-                        },
-                    }
-                    st.session_state.calculation_done = True
-
-                except Exception as e:
-                    st.error(f"❌ 计算过程中发生错误: {str(e)}")
-                    import traceback
-                    st.code(traceback.format_exc())
-                    return
-
-        # 如果计算完成，显示结果
-        if st.session_state.calculation_done and st.session_state.results:
-            results = st.session_state.results
-            hydro_df = results["hydro_df"]
-            non_hydro_df = results["non_hydro_df"]
-            params = results["params"]
-
-            st.markdown("---")
-            st.markdown('<p class="sub-header">✅ 计算完成</p>', unsafe_allow_html=True)
-
-            st.markdown(
-                f"""
-                <div class="success-box">
-                    <b>计算参数:</b> 速度={params["V_inf"]} m/s, 来流温度={params["T_inf"]} K, 
-                    防冰温度={params["T_wall"]} K, 高度={params["H_alt"]} m, LWC={params["LWC"]} kg/m³,
-                    翼展单边={params["wing_span"]} m
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            st.subheader("📊 关键热载荷指标")
-
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                max_Qn = hydro_df["Qn"].max() if len(hydro_df) > 0 else 0
-                st.metric("最大总热流 Qn (疏水)", f"{max_Qn:.2f} W/m²")
-            with col2:
-                max_Qa = hydro_df["Qa"].max() if len(hydro_df) > 0 else 0
-                st.metric("最大对流换热 Qa", f"{max_Qa:.2f} W/m²")
-            with col3:
-                max_Qe = hydro_df["Qe"].max() if len(hydro_df) > 0 else 0
-                st.metric("最大蒸发换热 Qe", f"{max_Qe:.2f} W/m²")
-            with col4:
-                max_Qw = hydro_df["Qw"].max() if len(hydro_df) > 0 else 0
-                st.metric("最大水滴换热 Qw", f"{max_Qw:.2f} W/m²")
-
-            st.subheader("📉 热载荷分布曲线")
-
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(
-                ["热流变化曲线", "表面形状", "防冰功率密度分布", "数据表格", "📐 分区设计工具"]
-            )
-
-            # ========== 热流变化曲线（原有代码）==========
-            with tab1:
-                # ...（原有代码保持不变）...
-                pass
-
-            # ========== 表面形状（原有代码）==========
-            with tab2:
-                # ...（原有代码保持不变）...
-                pass
-
-            # ========== 防冰功率密度分布（原有代码）==========
-            with tab3:
-                # ...（原有代码保持不变）...
-                pass
-
-            # ========== 数据表格（原有代码）==========
-            with tab4:
-                # ...（原有代码保持不变）...
-                pass
-
-            # ========== 分区防冰功率计算（可编辑宽度、Qn和系数）==========
-            st.markdown("### 🔥 分区防冰功率计算")
-
-            import math
-
-            hydro_zones = results["hydro_zones"]
-            non_hydro_zones = results["non_hydro_zones"]
-
-            scheme = st.radio("选择防冰方案", ["疏水方案", "不疏水方案"], horizontal=True, key="scheme_radio")
-            current_zones = hydro_zones if scheme == "疏水方案" else non_hydro_zones
-
-            DEFAULT_COEFFS = {
-                "A": 1.46,
-                "B": 1.34,
-                "C": 1.34,
-                "D": 1.28,
-                "E": 1.28,
-            }
-
-            all_zones = ["C", "B", "A", "D", "E"]
-
-            if "edited_widths" not in st.session_state:
-                st.session_state.edited_widths = {"hydro": {}, "non_hydro": {}}
-            if "edited_qns" not in st.session_state:
-                st.session_state.edited_qns = {"hydro": {}, "non_hydro": {}}
-            if "edited_coeffs" not in st.session_state:
-                st.session_state.edited_coeffs = {"hydro": {}, "non_hydro": {}}
-
-            default_widths = {}
-            default_qns = {}
-            for zone in all_zones:
-                info = current_zones.get(zone, {"width": 0, "typical_qn": 0})
-                raw_width = info["width"]
-                default_widths[zone] = math.ceil(raw_width) if raw_width > 0 else 0
-                default_qns[zone] = info["typical_qn"]
-
-            default_coeffs = {zone: DEFAULT_COEFFS[zone] for zone in all_zones}
-
-            key = "hydro" if scheme == "疏水方案" else "non_hydro"
-
-            if not st.session_state.edited_widths[key]:
-                st.session_state.edited_widths[key] = default_widths.copy()
-            else:
-                for zone in all_zones:
-                    if zone not in st.session_state.edited_widths[key]:
-                        st.session_state.edited_widths[key][zone] = default_widths.get(zone, 0)
-
-            if not st.session_state.edited_qns[key]:
-                st.session_state.edited_qns[key] = default_qns.copy()
-            else:
-                for zone in all_zones:
-                    if zone not in st.session_state.edited_qns[key]:
-                        st.session_state.edited_qns[key][zone] = default_qns.get(zone, 0)
-
-            if not st.session_state.edited_coeffs[key]:
-                st.session_state.edited_coeffs[key] = default_coeffs.copy()
-            else:
-                for zone in all_zones:
-                    if zone not in st.session_state.edited_coeffs[key]:
-                        st.session_state.edited_coeffs[key][zone] = default_coeffs.get(zone, DEFAULT_COEFFS[zone])
-
-            st.info("💡 **可编辑列**：您可以直接修改“宽度 (mm)”、“典型Qn (W/m²)”和“修正系数 C”，其他列将自动计算更新。")
-
-            edit_data = []
-            for zone in all_zones:
-                width = st.session_state.edited_widths[key][zone]
-                qn = st.session_state.edited_qns[key][zone]
-                coeff = st.session_state.edited_coeffs[key][zone]
-                qn_modified = qn * coeff
-                power = params["wing_span"] * 0.001 * qn_modified * width if width > 0 else 0
-                edit_data.append({
-                    "分区": zone,
-                    "宽度 (mm)": width,
-                    "典型Qn (W/m²)": round(qn, 1),
-                    "修正系数 C": coeff,
-                    "修正后Qn (W/m²)": round(qn_modified, 1),
-                    "功率 (W)": round(power, 1),
-                })
-
-            edit_df = pd.DataFrame(edit_data)
-
-            edited_df = st.data_editor(
-                edit_df,
-                column_config={
-                    "分区": st.column_config.TextColumn("分区", disabled=True),
-                    "宽度 (mm)": st.column_config.NumberColumn("宽度 (mm)", min_value=0, step=1, format="%d"),
-                    "典型Qn (W/m²)": st.column_config.NumberColumn("典型Qn (W/m²)", min_value=0.0, step=0.1,
-                                                                   format="%.1f"),
-                    "修正系数 C": st.column_config.NumberColumn("修正系数 C", min_value=0.0, step=0.01, format="%.2f"),
-                    "修正后Qn (W/m²)": st.column_config.NumberColumn("修正后Qn (W/m²)", disabled=True, format="%.1f"),
-                    "功率 (W)": st.column_config.NumberColumn("功率 (W)", disabled=True, format="%.1f"),
-                },
-                hide_index=True,
-                use_container_width=True,
-            )
-
-            for i, row in edited_df.iterrows():
-                zone = row["分区"]
-                st.session_state.edited_widths[key][zone] = int(row["宽度 (mm)"])
-                st.session_state.edited_qns[key][zone] = row["典型Qn (W/m²)"]
-                st.session_state.edited_coeffs[key][zone] = row["修正系数 C"]
-
-            total_power = 0
-            for i, row in edited_df.iterrows():
-                total_power += row["功率 (W)"]
-
-            st.markdown(
-                f"""
-                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                            padding: 1rem; border-radius: 8px; color: white; text-align: center; margin-top: 1rem;">
-                    <h3>🎯 当前方案（{scheme}）防冰总功率: {total_power:.1f} W ({total_power / 1000:.2f} kW)</h3>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            # ========== 分区设计示意图（根据编辑后的宽度绘制）==========
-            st.markdown("### 🛩️ 主机翼防冰分区设计示意图")
-            zone_colors_dict = {
-                "A": "#FF1493", "B": "#90EE90", "C": "#48D1CC", "D": "#9370DB", "E": "#800080"
-            }
-
-            fig_zones = go.Figure()
-            fixed_order = ["E", "D", "A", "B", "C"]
-            zone_heights = []
-            for zone in fixed_order:
-                width = st.session_state.edited_widths[key].get(zone, 0)
-                if width > 0:
-                    zone_heights.append((zone, width))
-
-            if not zone_heights:
-                zone_heights = [("C", 50), ("B", 40), ("A", 30), ("D", 20), ("E", 10)]
-
-            current_y = 0
-            for zone, width_mm in zone_heights:
-                height = width_mm * 1.5
-                y_start = current_y
-                y_end = current_y + height
-
-                if zone == "A":
-                    label = f"{zone}区：前缘防冰区域"
-                elif zone in ["B", "C"]:
-                    label = f"{zone}区-上翼面防冰区域"
-                else:
-                    label = f"{zone}区-下翼面防冰区域"
-
-                fig_zones.add_trace(go.Scatter(
-                    x=[0.3, 0.8, 0.8, 0.3, 0.3],
-                    y=[y_start, y_start, y_end, y_end, y_start],
-                    fill="toself",
-                    fillcolor=zone_colors_dict.get(zone, "#888888"),
-                    opacity=0.85,
-                    line=dict(color="DarkGray", width=1),
-                    mode="lines",
-                    showlegend=False,
-                ))
-                fig_zones.add_annotation(
-                    x=0.55,
-                    y=(y_start + y_end) / 2,
-                    text=label,
-                    showarrow=False,
-                    font=dict(size=11, color="black", weight="bold"),
-                )
-
-                arrow_x = 0.82
-                mid_y = (y_start + y_end) / 2
-                fig_zones.add_shape(type="line", x0=arrow_x - 0.018, y0=y_start, x1=arrow_x + 0.01, y1=y_start,
-                                    line=dict(color="#333", width=1))
-                fig_zones.add_shape(type="line", x0=arrow_x - 0.018, y0=y_end, x1=arrow_x + 0.01, y1=y_end,
-                                    line=dict(color="#333", width=1))
-                fig_zones.add_shape(type="line", x0=arrow_x, y0=y_start, x1=arrow_x, y1=y_end,
-                                    line=dict(color="#333", width=1))
-                fig_zones.add_annotation(
-                    x=arrow_x, y=mid_y,
-                    text=f"{round(width_mm)}mm",
-                    showarrow=False,
-                    font=dict(size=10, color="#333"),
-                    bgcolor="white",
-                )
-                current_y = y_end
-
-            total_height = current_y
-            zone_total_mm = sum(w for _, w in zone_heights)
-            wing_span_mm = int(params["wing_span"] * 1000)
-
-            left_x = 0.28
-            fig_zones.add_shape(type="line", x0=left_x - 0.015, y0=0, x1=left_x + 0.015, y1=0,
-                                line=dict(color="#333", width=1))
-            fig_zones.add_shape(type="line", x0=left_x - 0.015, y0=total_height, x1=left_x + 0.015, y1=total_height,
-                                line=dict(color="#333", width=1))
-            fig_zones.add_shape(type="line", x0=left_x, y0=0, x1=left_x, y1=total_height,
-                                line=dict(color="#333", width=1))
-            fig_zones.add_annotation(x=left_x, y=total_height / 2, text=f"{round(zone_total_mm)}mm",
-                                     showarrow=False, font=dict(size=10, color="#333"), bgcolor="white")
-
-            fig_zones.add_shape(type="line", x0=0.3, y0=-5.5, x1=0.8, y1=-5.5, line=dict(color="#333", width=1))
-            fig_zones.add_annotation(x=0.55, y=-5.1, text=f"{wing_span_mm}mm",
-                                     showarrow=False, font=dict(size=12, color="#333"), bgcolor="white")
-
-            fig_zones.update_layout(
-                title=f"主机翼防冰分区设计示意图（{scheme}）",
-                height=max(550, total_height + 180),
-                showlegend=False,
-                xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, showline=False, range=[0.15, 0.95]),
-                yaxis=dict(showticklabels=False, showgrid=False, zeroline=False, showline=False,
-                           range=[-10, total_height + 25]),
-                plot_bgcolor="white",
-                margin=dict(l=20, r=20, t=80, b=100),
-            )
-            st.plotly_chart(fig_zones, use_container_width=True)
-
-            st.markdown("### 📥 下载结果")
-
-            wb = create_excel_output(
-                results["upper_calc"],
-                results["lower_calc"],
-                params["V_inf"],
-                params["T_inf"],
-                params["T_wall"],
-                params["H_alt"],
-                params["LWC"],
-            )
-
-            excel_buffer = io.BytesIO()
-            wb.save(excel_buffer)
-            excel_buffer.seek(0)
-
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                st.download_button(
-                    label="📊 下载完整 Excel 报告",
-                    data=excel_buffer,
-                    file_name=f"防冰热载荷计算_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    use_container_width=True,
-                )
-            with col_d2:
-                csv_buffer = io.StringIO()
-                hydro_df.to_csv(csv_buffer, index=False)
-                csv_data = csv_buffer.getvalue()
-                st.download_button(
-                    label="📋 下载疏水数据 (CSV)",
-                    data=csv_data,
-                    file_name=f"疏水热流数据_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-
-            with st.expander("📊 详细统计信息"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**疏水表面统计**")
-                    if len(hydro_df) > 0:
-                        st.dataframe(hydro_df.describe().round(4), use_container_width=True)
-                with col2:
-                    st.write("**不疏水表面统计**")
-                    if len(non_hydro_df) > 0:
-                        st.dataframe(non_hydro_df.describe().round(4), use_container_width=True)
-
-            # 保存方案
-            with st.expander("💾 保存分区方案（供设计工具使用）"):
-                col_save1, col_save2 = st.columns([3, 1])
-                with col_save1:
-                    scheme_name = st.text_input("方案名称", value=f"方案_{len(load_schemes()) + 1}")
-                with col_save2:
-                    if st.button("保存当前方案"):
-                        key = "hydro" if scheme == "疏水方案" else "non_hydro"
-                        widths = st.session_state.edited_widths[key].copy()
-                        for zone in ["C", "B", "A", "D", "E"]:
-                            if zone not in widths:
-                                widths[zone] = 0
-                        scheme_data = {
-                            "name": scheme_name,
-                            "wing_span": params["wing_span"],
-                            "widths": widths,
-                            "scheme_type": scheme,
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        filepath = save_scheme_to_file(scheme_data)
-                        st.success(f"方案「{scheme_name}」已保存至 {filepath}")
 
 
     elif mode == "分区设计工具":
-
-        st.markdown("## ✏️ 主机翼分区设计工具")
-
+        st.markdown("##### ✏️ 主机翼分区设计工具")
         st.info("选择之前保存的分区方案，并配置电偶等参数，生成设计图纸。")
 
         schemes = load_schemes()
-
         if not schemes:
-
             st.warning("暂无保存的分区方案。请先切换到「热载荷计算」模式完成计算并保存一个方案。")
-
         else:
-
+            # 方案选择（无删除按钮）
             selected_index = st.selectbox(
-
                 "选择分区方案",
-
                 options=range(len(schemes)),
-
-                format_func=lambda i: f"{schemes[i]['name']} ({schemes[i]['timestamp'][:19]})"
-
+                format_func=lambda i: f"{schemes[i]['name']} ({schemes[i]['timestamp'][:19]})",
+                key="design_mode_scheme"
             )
-
             selected_scheme = schemes[selected_index]
 
+            # 显示方案信息
             col_info1, col_info2 = st.columns(2)
-
             with col_info1:
-
                 st.metric("翼展单边长度", f"{selected_scheme['wing_span']} m")
-
             with col_info2:
-
                 st.metric("方案类型", selected_scheme['scheme_type'])
 
-            widths_df = pd.DataFrame([selected_scheme["widths"]], index=["宽度 (mm)"]).T
+            # 使用紧凑的指标卡片显示各分区宽度
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                st.metric("C 区", f"{selected_scheme['widths'].get('C', 0):.0f} mm")
+            with col2:
+                st.metric("B 区", f"{selected_scheme['widths'].get('B', 0):.0f} mm")
+            with col3:
+                st.metric("A 区", f"{selected_scheme['widths'].get('A', 0):.0f} mm")
+            with col4:
+                st.metric("D 区", f"{selected_scheme['widths'].get('D', 0):.0f} mm")
+            with col5:
+                st.metric("E 区", f"{selected_scheme['widths'].get('E', 0):.0f} mm")
 
-            st.dataframe(widths_df, use_container_width=True)
-
-            # 使用表单包装设计参数，避免每次调整参数都刷新页面
-
-            with st.form("design_params_form"):
-
-                st.markdown("### ⚙️ 设计参数设置")
-
+            # 设计参数表单（避免参数调整时页面刷新）
+            with st.form("design_params_form_mode"):
+                st.markdown("##### ⚙️ 设计参数设置")
                 col1, col2 = st.columns(2)
-
                 with col1:
-                    total_length = st.number_input("主体总长 (mm)", value=500.0, step=10.0, key="total_length")
-
-                    bottom_height = st.number_input("底部段高度 (mm)", value=72.5, step=5.0, key="bottom_height")
-
-                    top_height = st.number_input("顶部段高度 (mm)", value=72.5, step=5.0, key="top_height")
-
-                    boss_width = st.number_input("右侧凸台宽度 (mm)", value=10.0, step=2.0, key="boss_width")
-
-                    left_boss_width = st.number_input("左侧黄色矩形宽度 (mm)", value=10.0, step=2.0,
-                                                      key="left_boss_width")
-
-                    hole_diameter = st.number_input("圆孔直径 (mm)", value=6.0, step=1.0, key="hole_diameter")
-
+                    total_length = st.number_input("主体总长 (mm)", value=500.0, step=10.0, key="total_length_mode")
+                    bottom_height = st.number_input("底部段高度 (mm)", value=72.5, step=5.0, key="bottom_height_mode")
+                    top_height = st.number_input("顶部段高度 (mm)", value=72.5, step=5.0, key="top_height_mode")
+                    boss_width = st.number_input("右侧凸台宽度 (mm)", value=10.0, step=2.0, key="boss_width_mode")
+                    left_boss_width = st.number_input("左侧黄色矩形宽度 (mm)", value=10.0, step=2.0, key="left_boss_width_mode")
+                    hole_diameter = st.number_input("圆孔直径 (mm)", value=6.0, step=1.0, key="hole_diameter_mode")
                 with col2:
-                    thermocouple_width = st.number_input("电偶宽度 (mm)", value=7.0, step=1.0, key="thermocouple_width")
-
-                    thermocouple_extension = st.number_input("电偶超出顶部距离 (mm)", value=10.0, step=5.0,
-                                                             key="thermocouple_extension")
-
-                    left_thermocouple_dist = st.number_input("左电偶距左边框距离 (mm)", value=20.0, step=5.0,
-                                                             key="left_thermocouple_dist")
-
-                    right_thermocouple_dist = st.number_input("右电偶距凸台左侧距离 (mm)", value=10.0, step=5.0,
-                                                              key="right_thermocouple_dist")
+                    thermocouple_width = st.number_input("电偶宽度 (mm)", value=7.0, step=1.0, key="thermocouple_width_mode")
+                    thermocouple_extension = st.number_input("电偶超出顶部距离 (mm)", value=10.0, step=5.0, key="thermocouple_extension_mode")
+                    left_thermocouple_dist = st.number_input("左电偶距左边框距离 (mm)", value=20.0, step=5.0, key="left_thermocouple_dist_mode")
+                    right_thermocouple_dist = st.number_input("右电偶距凸台左侧距离 (mm)", value=10.0, step=5.0, key="right_thermocouple_dist_mode")
 
                 submitted = st.form_submit_button("生成设计图纸", type="primary")
-
                 if submitted:
                     with st.spinner("生成图纸中..."):
                         wing_span_mm = selected_scheme["wing_span"] * 1000
-
                         widths = selected_scheme["widths"]
 
                         fig_no = draw_wing_schematic(
-
                             widths=widths,
-
                             wing_span=wing_span_mm,
-
                             total_length=total_length,
-
                             bottom_height=bottom_height,
-
                             top_height=top_height,
-
                             boss_width=boss_width,
-
                             left_boss_width=left_boss_width,
-
                             hole_diameter=hole_diameter,
-
                             show_thermocouple=False,
-
                         )
-
                         fig_left = draw_wing_schematic(
-
                             widths=widths,
-
                             wing_span=wing_span_mm,
-
                             total_length=total_length,
-
                             bottom_height=bottom_height,
-
                             top_height=top_height,
-
                             boss_width=boss_width,
-
                             left_boss_width=left_boss_width,
-
                             hole_diameter=hole_diameter,
-
                             show_thermocouple=True,
-
                             thermocouple_side='left',
-
                             thermocouple_width=thermocouple_width,
-
                             thermocouple_extension=thermocouple_extension,
-
                             left_thermocouple_dist=left_thermocouple_dist,
-
                             right_thermocouple_dist=right_thermocouple_dist,
-
                         )
-
                         fig_right = draw_wing_schematic(
-
                             widths=widths,
-
                             wing_span=wing_span_mm,
-
                             total_length=total_length,
-
                             bottom_height=bottom_height,
-
                             top_height=top_height,
-
                             boss_width=boss_width,
-
                             left_boss_width=left_boss_width,
-
                             hole_diameter=hole_diameter,
-
                             show_thermocouple=True,
-
                             thermocouple_side='right',
-
                             thermocouple_width=thermocouple_width,
-
                             thermocouple_extension=thermocouple_extension,
-
                             left_thermocouple_dist=left_thermocouple_dist,
-
                             right_thermocouple_dist=right_thermocouple_dist,
-
                         )
 
-                        # 将图形对象和字节数据存入 session_state
-
-                        st.session_state.design_figs = {
-
+                        # 保存到 session_state（使用模式专用键名）
+                        st.session_state.design_figs_mode = {
                             'no': fig_no,
-
                             'left': fig_left,
-
                             'right': fig_right
-
                         }
-
                         buf_no = io.BytesIO()
-
                         fig_no.savefig(buf_no, format="png", dpi=300, bbox_inches='tight')
-
-                        st.session_state.design_buf_no = buf_no.getvalue()
+                        st.session_state.design_buf_no_mode = buf_no.getvalue()
 
                         buf_left = io.BytesIO()
-
                         fig_left.savefig(buf_left, format="png", dpi=300, bbox_inches='tight')
-
-                        st.session_state.design_buf_left = buf_left.getvalue()
+                        st.session_state.design_buf_left_mode = buf_left.getvalue()
 
                         buf_right = io.BytesIO()
-
                         fig_right.savefig(buf_right, format="png", dpi=300, bbox_inches='tight')
-
-                        st.session_state.design_buf_right = buf_right.getvalue()
+                        st.session_state.design_buf_right_mode = buf_right.getvalue()
 
                         st.success("图纸生成完成！可在下方下载。")
 
-            # 显示图片和下载按钮（在表单外部）
-
-            if 'design_buf_no' in st.session_state:
+            # 显示图片和下载按钮（在表单外部，不会因下载而刷新）
+            if 'design_buf_no_mode' in st.session_state:
                 st.markdown("### 🖼️ 设计图纸预览")
-
                 col_img1, col_img2, col_img3 = st.columns(3)
-
                 with col_img1:
-                    st.pyplot(st.session_state.design_figs['no'])
-
+                    st.pyplot(st.session_state.design_figs_mode['no'])
                 with col_img2:
-                    st.pyplot(st.session_state.design_figs['left'])
-
+                    st.pyplot(st.session_state.design_figs_mode['left'])
                 with col_img3:
-                    st.pyplot(st.session_state.design_figs['right'])
+                    st.pyplot(st.session_state.design_figs_mode['right'])
 
                 st.markdown("### 📥 下载设计图纸")
-
                 col_dl1, col_dl2, col_dl3 = st.columns(3)
-
                 with col_dl1:
                     st.download_button(
-
                         label="📸 下载无电偶图",
-
-                        data=st.session_state.design_buf_no,
-
+                        data=st.session_state.design_buf_no_mode,
                         file_name="no_thermocouple.png",
-
                         mime="image/png"
-
                     )
-
                 with col_dl2:
                     st.download_button(
-
                         label="📸 下载左电偶图",
-
-                        data=st.session_state.design_buf_left,
-
+                        data=st.session_state.design_buf_left_mode,
                         file_name="left_thermocouple.png",
-
                         mime="image/png"
-
                     )
-
                 with col_dl3:
                     st.download_button(
-
                         label="📸 下载右电偶图",
-
-                        data=st.session_state.design_buf_right,
-
+                        data=st.session_state.design_buf_right_mode,
                         file_name="right_thermocouple.png",
-
                         mime="image/png"
-
                     )
 
 if __name__ == "__main__":
