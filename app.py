@@ -1408,173 +1408,264 @@ def main():
                         filepath = save_scheme_to_file(scheme_data)
                         st.success(f"方案「{scheme_name}」已保存至 {filepath}")
 
+
     elif mode == "分区设计工具":
+
         st.markdown("## ✏️ 主机翼分区设计工具")
+
         st.info("选择之前保存的分区方案，并配置电偶等参数，生成设计图纸。")
 
         schemes = load_schemes()
+
         if not schemes:
+
             st.warning("暂无保存的分区方案。请先切换到「热载荷计算」模式完成计算并保存一个方案。")
+
         else:
+
             selected_index = st.selectbox(
+
                 "选择分区方案",
+
                 options=range(len(schemes)),
+
                 format_func=lambda i: f"{schemes[i]['name']} ({schemes[i]['timestamp'][:19]})"
+
             )
+
             selected_scheme = schemes[selected_index]
 
             col_info1, col_info2 = st.columns(2)
+
             with col_info1:
+
                 st.metric("翼展单边长度", f"{selected_scheme['wing_span']} m")
+
             with col_info2:
+
                 st.metric("方案类型", selected_scheme['scheme_type'])
 
             widths_df = pd.DataFrame([selected_scheme["widths"]], index=["宽度 (mm)"]).T
+
             st.dataframe(widths_df, use_container_width=True)
 
-            st.markdown("### ⚙️ 设计参数设置")
-            with st.expander("点击展开/收起参数设置", expanded=True):
+            # 使用表单包装设计参数，避免每次调整参数都刷新页面
+
+            with st.form("design_params_form"):
+
+                st.markdown("### ⚙️ 设计参数设置")
+
                 col1, col2 = st.columns(2)
+
                 with col1:
-                    total_length = st.number_input("主体总长 (mm)", value=500.0, step=10.0)
-                    bottom_height = st.number_input("底部段高度 (mm)", value=72.5, step=5.0)
-                    top_height = st.number_input("顶部段高度 (mm)", value=72.5, step=5.0)
-                    boss_width = st.number_input("右侧凸台宽度 (mm)", value=10.0, step=2.0)
-                    left_boss_width = st.number_input("左侧黄色矩形宽度 (mm)", value=10.0, step=2.0)
-                    hole_diameter = st.number_input("圆孔直径 (mm)", value=6.0, step=1.0)
+                    total_length = st.number_input("主体总长 (mm)", value=500.0, step=10.0, key="total_length")
+
+                    bottom_height = st.number_input("底部段高度 (mm)", value=72.5, step=5.0, key="bottom_height")
+
+                    top_height = st.number_input("顶部段高度 (mm)", value=72.5, step=5.0, key="top_height")
+
+                    boss_width = st.number_input("右侧凸台宽度 (mm)", value=10.0, step=2.0, key="boss_width")
+
+                    left_boss_width = st.number_input("左侧黄色矩形宽度 (mm)", value=10.0, step=2.0,
+                                                      key="left_boss_width")
+
+                    hole_diameter = st.number_input("圆孔直径 (mm)", value=6.0, step=1.0, key="hole_diameter")
+
                 with col2:
-                    thermocouple_width = st.number_input("电偶宽度 (mm)", value=7.0, step=1.0)
-                    thermocouple_extension = st.number_input("电偶超出顶部距离 (mm)", value=10.0, step=5.0)
-                    left_thermocouple_dist = st.number_input("左电偶距左边框距离 (mm)", value=20.0, step=5.0)
-                    right_thermocouple_dist = st.number_input("右电偶距凸台左侧距离 (mm)", value=10.0, step=5.0)
+                    thermocouple_width = st.number_input("电偶宽度 (mm)", value=7.0, step=1.0, key="thermocouple_width")
 
-            if st.button("生成设计图纸", type="primary"):
-                with st.spinner("生成图纸中..."):
-                    wing_span_mm = selected_scheme["wing_span"] * 1000
-                    widths = selected_scheme["widths"]
+                    thermocouple_extension = st.number_input("电偶超出顶部距离 (mm)", value=10.0, step=5.0,
+                                                             key="thermocouple_extension")
 
-                    fig_no = draw_wing_schematic(
-                        widths=widths,
-                        wing_span=wing_span_mm,
-                        total_length=total_length,
-                        bottom_height=bottom_height,
-                        top_height=top_height,
-                        boss_width=boss_width,
-                        left_boss_width=left_boss_width,
-                        hole_diameter=hole_diameter,
-                        show_thermocouple=False,
-                    )
-                    fig_left = draw_wing_schematic(
-                        widths=widths,
-                        wing_span=wing_span_mm,
-                        total_length=total_length,
-                        bottom_height=bottom_height,
-                        top_height=top_height,
-                        boss_width=boss_width,
-                        left_boss_width=left_boss_width,
-                        hole_diameter=hole_diameter,
-                        show_thermocouple=True,
-                        thermocouple_side='left',
-                        thermocouple_width=thermocouple_width,
-                        thermocouple_extension=thermocouple_extension,
-                        left_thermocouple_dist=left_thermocouple_dist,
-                        right_thermocouple_dist=right_thermocouple_dist,
-                    )
-                    fig_right = draw_wing_schematic(
-                        widths=widths,
-                        wing_span=wing_span_mm,
-                        total_length=total_length,
-                        bottom_height=bottom_height,
-                        top_height=top_height,
-                        boss_width=boss_width,
-                        left_boss_width=left_boss_width,
-                        hole_diameter=hole_diameter,
-                        show_thermocouple=True,
-                        thermocouple_side='right',
-                        thermocouple_width=thermocouple_width,
-                        thermocouple_extension=thermocouple_extension,
-                        left_thermocouple_dist=left_thermocouple_dist,
-                        right_thermocouple_dist=right_thermocouple_dist,
-                    )
+                    left_thermocouple_dist = st.number_input("左电偶距左边框距离 (mm)", value=20.0, step=5.0,
+                                                             key="left_thermocouple_dist")
 
-                    # 将图形对象和字节数据存入 session_state
-                    st.session_state.design_figs = {
-                        'no': fig_no,
-                        'left': fig_left,
-                        'right': fig_right
-                    }
-                    # 预生成 PNG 字节数据，避免每次下载时重新生成
-                    buf_no = io.BytesIO()
-                    fig_no.savefig(buf_no, format="png", dpi=300, bbox_inches='tight')
-                    st.session_state.design_buf_no = buf_no.getvalue()
+                    right_thermocouple_dist = st.number_input("右电偶距凸台左侧距离 (mm)", value=10.0, step=5.0,
+                                                              key="right_thermocouple_dist")
 
-                    buf_left = io.BytesIO()
-                    fig_left.savefig(buf_left, format="png", dpi=300, bbox_inches='tight')
-                    st.session_state.design_buf_left = buf_left.getvalue()
+                submitted = st.form_submit_button("生成设计图纸", type="primary")
 
-                    buf_right = io.BytesIO()
-                    fig_right.savefig(buf_right, format="png", dpi=300, bbox_inches='tight')
-                    st.session_state.design_buf_right = buf_right.getvalue()
+                if submitted:
+                    with st.spinner("生成图纸中..."):
+                        wing_span_mm = selected_scheme["wing_span"] * 1000
 
-                    # 显示图片（只显示，不附带下载按钮）
-                    col_img1, col_img2, col_img3 = st.columns(3)
-                    with col_img1:
-                        st.pyplot(fig_no)
-                    with col_img2:
-                        st.pyplot(fig_left)
-                    with col_img3:
-                        st.pyplot(fig_right)
+                        widths = selected_scheme["widths"]
 
-                    st.success("图纸生成完成！可在下方下载。")
+                        fig_no = draw_wing_schematic(
 
-                # # 在图纸显示之后，添加下载按钮（仅在生成后显示）
-                # if 'design_buf_no' in st.session_state:
-                #     col_dl1, col_dl2, col_dl3 = st.columns(3)
-                #     with col_dl1:
-                #         st.download_button(
-                #             label="📸 下载无电偶图",
-                #             data=st.session_state.design_buf_no,
-                #             file_name="no_thermocouple.png",
-                #             mime="image/png"
-                #         )
-                #     with col_dl2:
-                #         st.download_button(
-                #             label="📸 下载左电偶图",
-                #             data=st.session_state.design_buf_left,
-                #             file_name="left_thermocouple.png",
-                #             mime="image/png"
-                #         )
-                #     with col_dl3:
-                #         st.download_button(
-                #             label="📸 下载右电偶图",
-                #             data=st.session_state.design_buf_right,
-                #             file_name="right_thermocouple.png",
-                #             mime="image/png"
-                #         )
-            # 始终显示下载按钮（如果存在缓存数据）
+                            widths=widths,
+
+                            wing_span=wing_span_mm,
+
+                            total_length=total_length,
+
+                            bottom_height=bottom_height,
+
+                            top_height=top_height,
+
+                            boss_width=boss_width,
+
+                            left_boss_width=left_boss_width,
+
+                            hole_diameter=hole_diameter,
+
+                            show_thermocouple=False,
+
+                        )
+
+                        fig_left = draw_wing_schematic(
+
+                            widths=widths,
+
+                            wing_span=wing_span_mm,
+
+                            total_length=total_length,
+
+                            bottom_height=bottom_height,
+
+                            top_height=top_height,
+
+                            boss_width=boss_width,
+
+                            left_boss_width=left_boss_width,
+
+                            hole_diameter=hole_diameter,
+
+                            show_thermocouple=True,
+
+                            thermocouple_side='left',
+
+                            thermocouple_width=thermocouple_width,
+
+                            thermocouple_extension=thermocouple_extension,
+
+                            left_thermocouple_dist=left_thermocouple_dist,
+
+                            right_thermocouple_dist=right_thermocouple_dist,
+
+                        )
+
+                        fig_right = draw_wing_schematic(
+
+                            widths=widths,
+
+                            wing_span=wing_span_mm,
+
+                            total_length=total_length,
+
+                            bottom_height=bottom_height,
+
+                            top_height=top_height,
+
+                            boss_width=boss_width,
+
+                            left_boss_width=left_boss_width,
+
+                            hole_diameter=hole_diameter,
+
+                            show_thermocouple=True,
+
+                            thermocouple_side='right',
+
+                            thermocouple_width=thermocouple_width,
+
+                            thermocouple_extension=thermocouple_extension,
+
+                            left_thermocouple_dist=left_thermocouple_dist,
+
+                            right_thermocouple_dist=right_thermocouple_dist,
+
+                        )
+
+                        # 将图形对象和字节数据存入 session_state
+
+                        st.session_state.design_figs = {
+
+                            'no': fig_no,
+
+                            'left': fig_left,
+
+                            'right': fig_right
+
+                        }
+
+                        buf_no = io.BytesIO()
+
+                        fig_no.savefig(buf_no, format="png", dpi=300, bbox_inches='tight')
+
+                        st.session_state.design_buf_no = buf_no.getvalue()
+
+                        buf_left = io.BytesIO()
+
+                        fig_left.savefig(buf_left, format="png", dpi=300, bbox_inches='tight')
+
+                        st.session_state.design_buf_left = buf_left.getvalue()
+
+                        buf_right = io.BytesIO()
+
+                        fig_right.savefig(buf_right, format="png", dpi=300, bbox_inches='tight')
+
+                        st.session_state.design_buf_right = buf_right.getvalue()
+
+                        st.success("图纸生成完成！可在下方下载。")
+
+            # 显示图片和下载按钮（在表单外部）
+
             if 'design_buf_no' in st.session_state:
+                st.markdown("### 🖼️ 设计图纸预览")
+
+                col_img1, col_img2, col_img3 = st.columns(3)
+
+                with col_img1:
+                    st.pyplot(st.session_state.design_figs['no'])
+
+                with col_img2:
+                    st.pyplot(st.session_state.design_figs['left'])
+
+                with col_img3:
+                    st.pyplot(st.session_state.design_figs['right'])
+
                 st.markdown("### 📥 下载设计图纸")
+
                 col_dl1, col_dl2, col_dl3 = st.columns(3)
+
                 with col_dl1:
                     st.download_button(
+
                         label="📸 下载无电偶图",
+
                         data=st.session_state.design_buf_no,
+
                         file_name="no_thermocouple.png",
+
                         mime="image/png"
+
                     )
+
                 with col_dl2:
                     st.download_button(
+
                         label="📸 下载左电偶图",
+
                         data=st.session_state.design_buf_left,
+
                         file_name="left_thermocouple.png",
+
                         mime="image/png"
+
                     )
+
                 with col_dl3:
                     st.download_button(
+
                         label="📸 下载右电偶图",
+
                         data=st.session_state.design_buf_right,
+
                         file_name="right_thermocouple.png",
+
                         mime="image/png"
+
                     )
 
 if __name__ == "__main__":
