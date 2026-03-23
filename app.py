@@ -1049,8 +1049,1052 @@ div[data-testid="stVerticalBlock"] > div:has(hr) {
             # 无需重复的“上传文件”提示，欢迎消息已包含
             return
 
+        # 文件已上传，显示参数确认和计算按钮（按钮已在侧边栏，但需在下方处理）
+        st.markdown("##### 📄 已上传文件")
+        # 可展示文件基本信息
+        try:
+            beta_content = beta_file.getvalue().decode("utf-8")
+            cp_content = cp_file.getvalue().decode("utf-8")
+
+            beta_df = parse_beta_from_string(beta_content)
+            cp_df = parse_cp_from_string(cp_content)
+
+            # ========== 新增格式校验 ==========
+            if beta_df.empty:
+                st.error("❌ Beta 文件格式错误：未能解析出有效的 Beta 数据点。\n"
+                         "请确保文件每行包含至少5个空格分隔的字段，且第1、3、5列分别为 x, z, beta（beta ≥ 0.001）。")
+                return
+
+            if cp_df.empty:
+                st.error("❌ Cp 文件格式错误：未能解析出有效的 Cp 数据点。\n"
+                         "请确保文件每行包含至少4个逗号分隔的字段，且第1、3、4列分别为 x, z, cp（cp ≤ 1）。")
+                return
+
+            # 可选：数据点数量警告
+            if len(beta_df) < 3:
+                st.warning("⚠️ Beta 数据点少于 3 个，计算精度可能受影响，但可继续。")
+            if len(cp_df) < 3:
+                st.warning("⚠️ Cp 数据点少于 3 个，计算精度可能受影响，但可继续。")
+            # ========== 格式校验结束 ==========
+
+            # 初始化折叠状态和滚动标志
+            if "data_preview_collapsed" not in st.session_state:
+                st.session_state.data_preview_collapsed = False
+            if "scroll_to_results" not in st.session_state:
+                st.session_state.scroll_to_results = False
+
+            with st.expander(
+                    f"📈 数据加载成功 - Beta: {len(beta_df)} 点, Cp: {len(cp_df)} 点",
+                    expanded=not st.session_state.data_preview_collapsed,
+            ):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Beta 数据预览**")
+                    st.dataframe(beta_df.head(10), use_container_width=True)
+                with col2:
+                    st.write("**Cp 数据预览**")
+                    st.dataframe(cp_df.head(10), use_container_width=True)
+        except Exception as e:
+            st.error(f"❌ 文件解析错误: {str(e)}")
+            return
+
+        if calculate_btn:
+            # 折叠数据预览（将在本次运行中生效）
+            st.session_state.data_preview_collapsed = True
+
+            with st.spinner("🧮 正在进行热载荷计算..."):
+                try:
+                    beta_df, origin_idx = shift_origin(beta_df)
+                    cp_df, _ = shift_origin(cp_df)
+
+                    from scipy.spatial import KDTree
+
+                    tree = KDTree(cp_df[["x", "z"]])
+                    _, idx = tree.query(beta_df[["x", "z"]])
+                    matched_df = beta_df.copy()
+                    matched_df["cp"] = cp_df.iloc[idx]["cp"].values
+
+                    upper, lower = split_surfaces_by_order(matched_df, origin_idx)
+
+                    upper_calc = compute_surface(
+                        upper, V_inf, T_inf, T_wall, H_alt, LWC, "upper"
+                    )
+                    lower_calc = compute_surface(
+                        lower, V_inf, T_inf, T_wall, H_alt, LWC, "lower"
+                    )
+
+                    hydro_df, non_hydro_df = extract_summary_data(upper_calc, lower_calc)
+
+                    # zones = calculate_zones(hydro_df, non_hydro_df)
+                    hydro_zones, non_hydro_zones = calculate_zones(hydro_df, non_hydro_df)
+
+                    st.session_state.results = {
+                        "upper_calc": upper_calc,
+                        "lower_calc": lower_calc,
+                        "hydro_df": hydro_df,
+                        "non_hydro_df": non_hydro_df,
+                        "hydro_zones": hydro_zones,
+                        "non_hydro_zones": non_hydro_zones,
+                        # "zones": zones,
+                        "params": {
+                            "V_inf": V_inf,
+                            "T_inf": T_inf,
+                            "T_wall": T_wall,
+                            "H_alt": H_alt,
+                            "LWC": LWC,
+                            "wing_span": wing_span,
+                        },
+                    }
+                    st.session_state.calculation_done = True
+
+                except Exception as e:
+                    st.error(f"❌ 计算过程中发生错误: {str(e)}")
+                    import traceback
+
+                    st.code(traceback.format_exc())
+                    return
+
+        if st.session_state.calculation_done and st.session_state.results:
+            # 添加锚点
+            st.markdown('<div id="result-anchor"></div>', unsafe_allow_html=True)
+            # 滚动到锚点
+            st.components.v1.html("""
+                <script>
+                    document.getElementById('result-anchor').scrollIntoView({behavior: 'smooth'});
+                </script>
+            """, height=0)
+            results = st.session_state.results
+            hydro_df = results["hydro_df"]
+            non_hydro_df = results["non_hydro_df"]
+            # zones = results["zones"]
+            params = results["params"]
+
+            st.markdown("---")
+            st.markdown('<p class="sub-header">✅ 计算完成</p>', unsafe_allow_html=True)
+
+            st.markdown(
+                f"""
+                <div class="success-box">
+                    <b>计算参数:</b> 速度={params["V_inf"]} m/s, 来流温度={params["T_inf"]} K, 
+                    防冰温度={params["T_wall"]} K, 高度={params["H_alt"]} m, LWC={params["LWC"]} kg/m³,
+                    翼展单边={params["wing_span"]} m
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # st.subheader("📊 关键热载荷指标")
+            st.markdown("##### 📉 关键热载荷指标")
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                max_Qn = hydro_df["Qn"].max() if len(hydro_df) > 0 else 0
+                st.metric("最大总热流 Qn (疏水)", f"{max_Qn:.2f} W/m²")
+            with col2:
+                max_Qa = hydro_df["Qa"].max() if len(hydro_df) > 0 else 0
+                st.metric("最大对流换热 Qa", f"{max_Qa:.2f} W/m²")
+            with col3:
+                max_Qe = hydro_df["Qe"].max() if len(hydro_df) > 0 else 0
+                st.metric("最大蒸发换热 Qe", f"{max_Qe:.2f} W/m²")
+            with col4:
+                max_Qw = hydro_df["Qw"].max() if len(hydro_df) > 0 else 0
+                st.metric("最大水滴换热 Qw", f"{max_Qw:.2f} W/m²")
+
+            # st.subheader("📉 热载荷分布曲线")
+            st.markdown("##### 📉 热载荷分布曲线")
+            # tab1, tab2, tab3, tab4 = st.tabs(
+            #     ["热流变化曲线", "表面形状", "防冰功率密度分布", "数据表格"]
+            # )
+            # 在结果展示部分，构建选项卡名称列表
+            tab_names = ["热流变化曲线", "表面形状", "防冰功率密度分布", "数据表格"]
+            if load_schemes():
+                tab_names.append("📐 分区设计工具")
+            tabs = st.tabs(tab_names)
+
+
+            with tabs[0]:
+                if len(hydro_df) > 0:
+                    # 准备 Htc 数据（从上下表面合并）
+                    upper = results["upper_calc"]
+                    lower = results["lower_calc"]
+                    htc_data = pd.concat([
+                        upper[["AG", "R"]].rename(columns={"AG": "s", "R": "Htc"}),
+                        lower[["AG", "R"]].rename(columns={"AG": "s", "R": "Htc"})
+                    ])
+                    htc_data = htc_data.sort_values("s").drop_duplicates(subset=["s"]).reset_index(drop=True)
+
+                    # 创建两行两列的子图
+                    fig = make_subplots(
+                        rows=2, cols=2,
+                        subplot_titles=("总热流 Qn 分布", "各分项热流分布", "β 角度分布", "局部换热系数 Htc 分布"),
+                        column_widths=[0.5, 0.5],
+                        row_heights=[0.5, 0.5],  # 两行等高
+                        vertical_spacing=0.25,
+                        horizontal_spacing=0.15,
+                        specs=[
+                            [{"type": "scatter"}, {"type": "scatter"}],
+                            [{"type": "scatter"}, {"type": "scatter"}]
+                        ],
+                    )
+
+                    # ---- 子图1：总热流 Qn ----
+                    fig.add_trace(
+                        go.Scatter(
+                            x=hydro_df["s"],
+                            y=hydro_df["Qn"],
+                            mode="lines+markers",
+                            name="疏水 Qn",
+                            line=dict(color="#2196F3", width=2),
+                            marker=dict(size=4, opacity=0.6),
+                        ),
+                        row=1, col=1,
+                    )
+                    if len(non_hydro_df) > 0:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=non_hydro_df["s"],
+                                y=non_hydro_df["Qn"],
+                                mode="lines+markers",
+                                name="不疏水 Qn",
+                                line=dict(color="#FF5722", width=2),
+                                marker=dict(size=4, opacity=0.6),
+                            ),
+                            row=1, col=1,
+                        )
+
+                    # ---- 子图2：各分项热流 ----
+                    fig.add_trace(
+                        go.Scatter(
+                            x=hydro_df["s"],
+                            y=hydro_df["Qa"],
+                            mode="lines",
+                            name="Qa 对流",
+                            line=dict(color="#4CAF50", width=2),
+                        ),
+                        row=1, col=2,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=hydro_df["s"],
+                            y=hydro_df["Qe"],
+                            mode="lines",
+                            name="Qe 蒸发",
+                            line=dict(color="#FF9800", width=2),
+                        ),
+                        row=1, col=2,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=hydro_df["s"],
+                            y=hydro_df["Qw"],
+                            mode="lines",
+                            name="Qw 水滴",
+                            line=dict(color="#9C27B0", width=2),
+                        ),
+                        row=1, col=2,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=hydro_df["s"],
+                            y=hydro_df["Qwv"],
+                            mode="lines",
+                            name="Qwv 动能",
+                            line=dict(color="#E91E63", width=2),
+                        ),
+                        row=1, col=2,
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=hydro_df["s"],
+                            y=hydro_df["Qv"],
+                            mode="lines",
+                            name="Qv 摩擦",
+                            line=dict(color="#607D8B", width=2),
+                        ),
+                        row=1, col=2,
+                    )
+
+                    # ---- 子图3：β 角度分布 ----
+                    max_beta_idx = hydro_df["beta"].idxmax()
+                    max_beta_val = hydro_df.loc[max_beta_idx, "beta"]
+                    max_beta_s = hydro_df.loc[max_beta_idx, "s"]
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=hydro_df["s"],
+                            y=hydro_df["beta"],
+                            mode="lines+markers",
+                            name="β 角度",
+                            line=dict(color="#3F51B5", width=2.5),
+                            marker=dict(size=4, color="#3F51B5", opacity=0.5),
+                        ),
+                        row=2, col=1,
+                    )
+                    # 最大值点
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[max_beta_s],
+                            y=[max_beta_val],
+                            mode="markers",
+                            name=f"β max = {max_beta_val:.3f}",
+                            marker=dict(color="red", size=12, symbol="circle", line=dict(width=1, color="darkred")),
+                        ),
+                        row=2, col=1,
+                    )
+                    # 数值标注
+                    fig.add_annotation(
+                        x=max_beta_s,
+                        y=max_beta_val,
+                        text=f"{max_beta_val:.3f}",
+                        showarrow=True,
+                        arrowhead=2,
+                        ax=20,
+                        ay=-30,
+                        font=dict(size=11, color="red", weight="bold"),
+                        row=2, col=1,
+                    )
+
+                    # ---- 子图4：局部换热系数 Htc ----
+                    # 标记最大值点
+                    max_htc_idx = htc_data["Htc"].idxmax()
+                    max_htc_val = htc_data.loc[max_htc_idx, "Htc"]
+                    max_htc_s = htc_data.loc[max_htc_idx, "s"]
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=htc_data["s"],
+                            y=htc_data["Htc"],
+                            mode="lines+markers",
+                            name="Htc 换热系数",
+                            line=dict(color="#00ACC1", width=2.5),
+                            marker=dict(size=4, color="#00ACC1", opacity=0.5),
+                            hovertemplate='弧长: %{x:.1f} mm<br>Htc: %{y:.1f} W/m²K<br>换热系数越大，散热越快<extra></extra>'
+
+                        ),
+                        row=2, col=2,
+                    )
+                    # 最大值点
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[max_htc_s],
+                            y=[max_htc_val],
+                            mode="markers",
+                            name=f"Htc max = {max_htc_val:.1f}",
+                            marker=dict(color="darkorange", size=12, symbol="circle",
+                                        line=dict(width=1, color="brown")),
+                        ),
+                        row=2, col=2,
+                    )
+                    # 数值标注
+                    fig.add_annotation(
+                        x=max_htc_s,
+                        y=max_htc_val,
+                        text=f"{max_htc_val:.1f}",
+                        showarrow=True,
+                        arrowhead=2,
+                        ax=20,
+                        ay=-30,
+                        font=dict(size=11, color="darkorange", weight="bold"),
+                        row=2, col=2,
+                    )
+
+                    # 更新布局：图例放在顶部居中，提高位置避免遮挡
+                    fig.update_layout(
+                        height=700,  # 适当增加高度
+                        showlegend=True,
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.05,
+                            xanchor="center",
+                            x=0.5,
+                            bgcolor="rgba(255,255,255,0.8)",
+                            bordercolor="LightGray",
+                            borderwidth=1,
+                            font=dict(size=9.5),
+                            itemclick="toggle",
+                            itemdoubleclick="toggleothers",
+                        ),
+                        margin=dict(l=40, r=40, t=110, b=40),
+                    )
+
+                    # 设置坐标轴标签
+                    fig.update_xaxes(title_text="弧长 s [mm]", row=1, col=1)
+                    fig.update_xaxes(title_text="弧长 s [mm]", row=1, col=2)
+                    fig.update_xaxes(title_text="弧长 s [mm]", row=2, col=1)
+                    fig.update_xaxes(title_text="弧长 s [mm]", row=2, col=2)
+                    fig.update_yaxes(title_text="热流 [W/m²]", row=1, col=1)
+                    fig.update_yaxes(title_text="热流 [W/m²]", row=1, col=2)
+                    fig.update_yaxes(title_text="β [rad]", row=2, col=1)
+                    fig.update_yaxes(title_text="Htc [W/m²K]", row=2, col=2)
+
+                    # 调整子图标题字体
+                    for i in range(1, 5):
+                        fig.layout.annotations[i - 1].update(font=dict(size=11))
+
+                    st.plotly_chart(fig, use_container_width=True)
+                    # st.caption("局部换热系数 Htc 表示对流换热能力，值越大，所需防冰功率越高。")
+            # st.caption(
+            #     """
+            #     **局部换热系数 Htc 分布说明**
+            #     - Htc 表示对流换热系数（单位：W/m²K），反映空气流过表面时的冷却能力。
+            #     - 值越大，表明散热越快，所需防冰加热功率越高。
+            #     - 通常在驻点（β 最大）附近 Htc 达到峰值，沿流向逐渐降低。
+            #     - 结合 β 和热流分量，可用于优化分区加热设计。
+            #     """
+            # )
+            with tabs[1]:
+                upper = results["upper_calc"]
+                lower = results["lower_calc"]
+
+                fig2 = go.Figure()
+
+                fig2.add_trace(
+                    go.Scatter(
+                        x=upper["B"],
+                        y=upper["C"],
+                        mode="lines+markers",
+                        name="上表面",
+                        line=dict(color="#2196F3", width=2),
+                        marker=dict(size=6),
+                    )
+                )
+
+                fig2.add_trace(
+                    go.Scatter(
+                        x=lower["B"],
+                        y=lower["C"],
+                        mode="lines+markers",
+                        name="下表面",
+                        line=dict(color="#FF5722", width=2),
+                        marker=dict(size=6),
+                    )
+                )
+
+                fig2.update_layout(
+                    title="机翼表面形状",
+                    xaxis_title="X (m)",
+                    yaxis_title="Z (m)",
+                    height=500,
+                    legend=dict(
+                        orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+                    ),
+                )
+
+                st.plotly_chart(fig2, use_container_width=True)
+
+            with tabs[2]:
+                st.markdown("##### 防冰功率密度大小分布 (s vs β)")
+
+                if len(hydro_df) > 0:
+                    fig3 = go.Figure()
+
+                    max_beta = hydro_df["beta"].max()
+                    A_threshold = max_beta * 0.7
+                    B_threshold = max_beta * 0.4
+
+                    hydro_sorted = hydro_df.sort_values("s")
+
+                    for zone_name, zone_color, zone_range in [
+                        ("A区", "#FF0000", (A_threshold, max_beta)),
+                        ("B区", "#FF6600", (B_threshold, A_threshold)),
+                        ("D区", "#00CC00", (0, B_threshold)),
+                    ]:
+                        zone_data = hydro_sorted[
+                            (hydro_sorted["beta"] >= zone_range[0])
+                            & (hydro_sorted["beta"] < zone_range[1])
+                            ]
+                        fig3.add_trace(
+                            go.Scatter(
+                                x=zone_data["s"],
+                                y=zone_data["beta"],
+                                mode="lines+markers",
+                                name=zone_name,
+                                line=dict(color=zone_color, width=2),
+                                marker=dict(size=6),
+                            )
+                        )
+
+                    if len(non_hydro_df) > 0:
+                        non_hydro_sorted = non_hydro_df.sort_values("s")
+                        for zone_name, zone_color, zone_range in [
+                            ("C区", "#0066FF", (B_threshold, A_threshold)),
+                            ("E区", "#00CC00", (0, B_threshold)),
+                        ]:
+                            zone_data = non_hydro_sorted[
+                                (non_hydro_sorted["beta"] >= zone_range[0])
+                                & (non_hydro_sorted["beta"] < zone_range[1])
+                                ]
+                            fig3.add_trace(
+                                go.Scatter(
+                                    x=zone_data["s"],
+                                    y=zone_data["beta"],
+                                    mode="lines+markers",
+                                    name=zone_name,
+                                    line=dict(color=zone_color, width=2),
+                                    marker=dict(size=6),
+                                )
+                            )
+
+                    fig3.update_layout(
+                        title="防冰功率密度大小分布 (s vs β)",
+                        xaxis_title="弧长 s [mm]",
+                        yaxis_title="β [rad]",
+                        height=500,
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="right",
+                            x=1,
+                        ),
+                    )
+
+                    st.plotly_chart(fig3, use_container_width=True)
+
+            with tabs[3]:
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("##### 疏水表面热流数据")
+                    if len(hydro_df) > 0:
+                        display_df = hydro_df.copy().round(4)
+                        st.dataframe(display_df, use_container_width=True, height=400)
+                    else:
+                        st.warning("无数据")
+
+                with col2:
+                    st.markdown("##### 不疏水表面热流数据")
+                    if len(non_hydro_df) > 0:
+                        display_df2 = non_hydro_df.copy().round(4)
+                        st.dataframe(display_df2, use_container_width=True, height=400)
+                    else:
+                        st.warning("无数据")
+
+            # 如果存在第五个选项卡
+            if len(tabs) > 4:
+                with tabs[4]:
+                    st.markdown("## ✏️ 主机翼分区设计工具")
+                    st.info("选择之前保存的分区方案，并配置电偶等参数，生成设计图纸。")
+                    schemes = load_schemes()
+                    if not schemes:
+                        st.warning("暂无保存的分区方案。请先保存一个方案。")
+                    else:
+                        # 方案选择和删除按钮（两列）
+                        col_sel, col_del = st.columns([4, 1])
+                        with col_sel:
+                            selected_index = st.selectbox(
+                                "选择分区方案",
+                                options=range(len(schemes)),
+                                format_func=lambda i: f"{schemes[i]['name']} ({schemes[i]['timestamp'][:19]})",
+                                key="design_tab_scheme"
+                            )
+                        with col_del:
+                            if st.button("🗑️ 删除当前方案", key="delete_scheme_tab"):
+                                filepath = os.path.join(SCHEMES_DIR, schemes[selected_index]["filename"])
+                                os.remove(filepath)
+                                st.success("方案已删除")
+                                st.rerun()  # 刷新页面更新方案列表
+                        selected_scheme = schemes[selected_index]
+
+                        # 显示方案信息
+                        col_info1, col_info2 = st.columns(2)
+                        with col_info1:
+                            st.metric("翼展单边长度", f"{selected_scheme['wing_span']} m")
+                        with col_info2:
+                            st.metric("方案类型", selected_scheme['scheme_type'])
+
+                        widths_df = pd.DataFrame([selected_scheme["widths"]], index=["宽度 (mm)"]).T
+                        st.dataframe(widths_df, use_container_width=True)
+
+                        # 设计参数表单（避免参数调整时页面刷新）
+                        with st.form("design_params_form_tab"):
+                            st.markdown("### ⚙️ 设计参数设置")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                total_length = st.number_input("主体总长 (mm)", value=500.0, step=10.0,
+                                                               key="total_length_tab")
+                                bottom_height = st.number_input("底部段高度 (mm)", value=72.5, step=5.0,
+                                                                key="bottom_height_tab")
+                                top_height = st.number_input("顶部段高度 (mm)", value=72.5, step=5.0,
+                                                             key="top_height_tab")
+                                boss_width = st.number_input("右侧凸台宽度 (mm)", value=10.0, step=2.0,
+                                                             key="boss_width_tab")
+                                left_boss_width = st.number_input("左侧黄色矩形宽度 (mm)", value=10.0, step=2.0,
+                                                                  key="left_boss_width_tab")
+                                hole_diameter = st.number_input("圆孔直径 (mm)", value=6.0, step=1.0,
+                                                                key="hole_diameter_tab")
+                            with col2:
+                                thermocouple_width = st.number_input("电偶宽度 (mm)", value=7.0, step=1.0,
+                                                                     key="thermocouple_width_tab")
+                                thermocouple_extension = st.number_input("电偶超出顶部距离 (mm)", value=10.0, step=5.0,
+                                                                         key="thermocouple_extension_tab")
+                                left_thermocouple_dist = st.number_input("左电偶距左边框距离 (mm)", value=20.0,
+                                                                         step=5.0, key="left_thermocouple_dist_tab")
+                                right_thermocouple_dist = st.number_input("右电偶距凸台左侧距离 (mm)", value=10.0,
+                                                                          step=5.0, key="right_thermocouple_dist_tab")
+
+                            submitted = st.form_submit_button("生成设计图纸", type="primary")
+                            if submitted:
+                                with st.spinner("生成图纸中..."):
+                                    wing_span_mm = selected_scheme["wing_span"] * 1000
+                                    widths = selected_scheme["widths"]
+
+                                    fig_no = draw_wing_schematic(
+                                        widths=widths,
+                                        wing_span=wing_span_mm,
+                                        total_length=total_length,
+                                        bottom_height=bottom_height,
+                                        top_height=top_height,
+                                        boss_width=boss_width,
+                                        left_boss_width=left_boss_width,
+                                        hole_diameter=hole_diameter,
+                                        show_thermocouple=False,
+                                    )
+                                    fig_left = draw_wing_schematic(
+                                        widths=widths,
+                                        wing_span=wing_span_mm,
+                                        total_length=total_length,
+                                        bottom_height=bottom_height,
+                                        top_height=top_height,
+                                        boss_width=boss_width,
+                                        left_boss_width=left_boss_width,
+                                        hole_diameter=hole_diameter,
+                                        show_thermocouple=True,
+                                        thermocouple_side='left',
+                                        thermocouple_width=thermocouple_width,
+                                        thermocouple_extension=thermocouple_extension,
+                                        left_thermocouple_dist=left_thermocouple_dist,
+                                        right_thermocouple_dist=right_thermocouple_dist,
+                                    )
+                                    fig_right = draw_wing_schematic(
+                                        widths=widths,
+                                        wing_span=wing_span_mm,
+                                        total_length=total_length,
+                                        bottom_height=bottom_height,
+                                        top_height=top_height,
+                                        boss_width=boss_width,
+                                        left_boss_width=left_boss_width,
+                                        hole_diameter=hole_diameter,
+                                        show_thermocouple=True,
+                                        thermocouple_side='right',
+                                        thermocouple_width=thermocouple_width,
+                                        thermocouple_extension=thermocouple_extension,
+                                        left_thermocouple_dist=left_thermocouple_dist,
+                                        right_thermocouple_dist=right_thermocouple_dist,
+                                    )
+
+                                    # 保存图形和字节数据到 session_state（使用特定键名）
+                                    st.session_state.design_figs_tab = {
+                                        'no': fig_no,
+                                        'left': fig_left,
+                                        'right': fig_right
+                                    }
+                                    buf_no = io.BytesIO()
+                                    fig_no.savefig(buf_no, format="png", dpi=300, bbox_inches='tight')
+                                    st.session_state.design_buf_no_tab = buf_no.getvalue()
+
+                                    buf_left = io.BytesIO()
+                                    fig_left.savefig(buf_left, format="png", dpi=300, bbox_inches='tight')
+                                    st.session_state.design_buf_left_tab = buf_left.getvalue()
+
+                                    buf_right = io.BytesIO()
+                                    fig_right.savefig(buf_right, format="png", dpi=300, bbox_inches='tight')
+                                    st.session_state.design_buf_right_tab = buf_right.getvalue()
+
+                                    st.success("图纸生成完成！可在下方下载。")
+
+                        # 显示图片和下载按钮（在表单外部，不会因下载而刷新）
+                        if 'design_buf_no_tab' in st.session_state:
+                            st.markdown("### 🖼️ 设计图纸预览")
+                            col_img1, col_img2, col_img3 = st.columns(3)
+                            with col_img1:
+                                st.pyplot(st.session_state.design_figs_tab['no'])
+                            with col_img2:
+                                st.pyplot(st.session_state.design_figs_tab['left'])
+                            with col_img3:
+                                st.pyplot(st.session_state.design_figs_tab['right'])
+
+                            st.markdown("### 📥 下载设计图纸")
+                            col_dl1, col_dl2, col_dl3 = st.columns(3)
+                            with col_dl1:
+                                st.download_button(
+                                    label="📸 下载无电偶图",
+                                    data=st.session_state.design_buf_no_tab,
+                                    file_name="no_thermocouple.png",
+                                    mime="image/png"
+                                )
+                            with col_dl2:
+                                st.download_button(
+                                    label="📸 下载左电偶图",
+                                    data=st.session_state.design_buf_left_tab,
+                                    file_name="left_thermocouple.png",
+                                    mime="image/png"
+                                )
+                            with col_dl3:
+                                st.download_button(
+                                    label="📸 下载右电偶图",
+                                    data=st.session_state.design_buf_right_tab,
+                                    file_name="right_thermocouple.png",
+                                    mime="image/png"
+                                )
+
+            # ========== 分区防冰功率计算（可编辑宽度和系数） ==========
+            # ========== 分区防冰功率计算（可编辑宽度、Qn和系数） ==========
+            st.markdown("##### 🔥 分区防冰功率计算")
+
+            import math
+
+            # 从 results 中获取分区数据
+            hydro_zones = results["hydro_zones"]
+            non_hydro_zones = results["non_hydro_zones"]
+
+            # 选择查看的方案
+            scheme = st.radio("选择防冰方案", ["疏水方案", "不疏水方案"], horizontal=True, key="scheme_radio")
+            current_zones = hydro_zones if scheme == "疏水方案" else non_hydro_zones
+
+            # 默认系数（硬编码，与之前保持一致）
+            DEFAULT_COEFFS = {
+                "A": 1.46,
+                "B": 1.34,
+                "C": 1.34,
+                "D": 1.28,
+                "E": 1.28,
+            }
+
+            # 分区顺序：与示意图一致（从上到下）
+            all_zones = ["C", "B", "A", "D", "E"]
+
+            # 初始化 session_state 中存储编辑宽度、Qn和系数的字典
+            if "edited_widths" not in st.session_state:
+                st.session_state.edited_widths = {"hydro": {}, "non_hydro": {}}
+            if "edited_qns" not in st.session_state:
+                st.session_state.edited_qns = {"hydro": {}, "non_hydro": {}}
+            if "edited_coeffs" not in st.session_state:
+                st.session_state.edited_coeffs = {"hydro": {}, "non_hydro": {}}
+
+            # 获取当前方案的默认值
+            default_widths = {}
+            default_qns = {}
+            for zone in all_zones:
+                info = current_zones.get(zone, {"width": 0, "typical_qn": 0})
+                raw_width = info["width"]
+                default_widths[zone] = math.ceil(raw_width) if raw_width > 0 else 0
+                default_qns[zone] = info["typical_qn"]
+
+            default_coeffs = {zone: DEFAULT_COEFFS[zone] for zone in all_zones}
+
+            key = "hydro" if scheme == "疏水方案" else "non_hydro"
+
+            # 初始化或补齐宽度
+            if not st.session_state.edited_widths[key]:
+                st.session_state.edited_widths[key] = default_widths.copy()
+            else:
+                for zone in all_zones:
+                    if zone not in st.session_state.edited_widths[key]:
+                        st.session_state.edited_widths[key][zone] = default_widths.get(zone, 0)
+
+            # 初始化或补齐Qn
+            if not st.session_state.edited_qns[key]:
+                st.session_state.edited_qns[key] = default_qns.copy()
+            else:
+                for zone in all_zones:
+                    if zone not in st.session_state.edited_qns[key]:
+                        st.session_state.edited_qns[key][zone] = default_qns.get(zone, 0)
+
+            # 初始化或补齐系数
+            if not st.session_state.edited_coeffs[key]:
+                st.session_state.edited_coeffs[key] = default_coeffs.copy()
+            else:
+                for zone in all_zones:
+                    if zone not in st.session_state.edited_coeffs[key]:
+                        st.session_state.edited_coeffs[key][zone] = default_coeffs.get(zone, DEFAULT_COEFFS[zone])
+
+            # 提示信息
+            st.info("💡 **可编辑列**：您可以直接修改“宽度 (mm)”、“典型Qn (W/m²)”和“修正系数 C”，其他列将自动计算更新。")
+
+            # 构建可编辑数据表（始终显示5个分区）
+            edit_data = []
+            for zone in all_zones:
+                width = st.session_state.edited_widths[key][zone]
+                qn = st.session_state.edited_qns[key][zone]
+                coeff = st.session_state.edited_coeffs[key][zone]
+                qn_modified = qn * coeff
+                power = params["wing_span"] * 0.001 * qn_modified * width if width > 0 else 0
+                edit_data.append({
+                    "分区": zone,
+                    "宽度 (mm)": width,
+                    "典型Qn (W/m²)": round(qn, 1),
+                    "修正系数 C": coeff,
+                    "修正后Qn (W/m²)": round(qn_modified, 1),
+                    "功率 (W)": round(power, 1),
+                })
+
+            edit_df = pd.DataFrame(edit_data)
+
+            # 使用 data_editor 允许编辑宽度、Qn和系数
+            edited_df = st.data_editor(
+                edit_df,
+                column_config={
+                    "分区": st.column_config.TextColumn(
+                        "分区",
+                        disabled=True,
+                        help="分区标识（不可编辑）"
+                    ),
+                    "宽度 (mm)": st.column_config.NumberColumn(
+                        "宽度 (mm)",
+                        min_value=0,
+                        step=1,
+                        format="%d",
+                        help="可编辑：分区宽度（毫米），修改后功率自动更新"
+                    ),
+                    "典型Qn (W/m²)": st.column_config.NumberColumn(
+                        "典型Qn (W/m²)",
+                        min_value=0.0,
+                        step=0.1,
+                        format="%.1f",
+                        help="可编辑：分区典型总热流，修改后修正Qn和功率自动更新"
+                    ),
+                    "修正系数 C": st.column_config.NumberColumn(
+                        "修正系数 C",
+                        min_value=0.0,
+                        step=0.01,
+                        format="%.2f",
+                        help="可编辑：模型修正系数，修改后修正Qn和功率自动更新"
+                    ),
+                    "修正后Qn (W/m²)": st.column_config.NumberColumn(
+                        "修正后Qn (W/m²)",
+                        disabled=True,
+                        format="%.1f",
+                        help="修正后Qn = 典型Qn × 修正系数"
+                    ),
+                    "功率 (W)": st.column_config.NumberColumn(
+                        "功率 (W)",
+                        disabled=True,
+                        format="%.1f",
+                        help="功率 = 翼展单边 × 修正后Qn × 宽度 / 1000"
+                    ),
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
+
+            # 更新 session_state 中的编辑值
+            for i, row in edited_df.iterrows():
+                zone = row["分区"]
+                st.session_state.edited_widths[key][zone] = int(row["宽度 (mm)"])
+                st.session_state.edited_qns[key][zone] = row["典型Qn (W/m²)"]
+                st.session_state.edited_coeffs[key][zone] = row["修正系数 C"]
+
+            # 重新计算当前方案总功率（使用编辑后值）
+            total_power = 0
+            for i, row in edited_df.iterrows():
+                total_power += row["功率 (W)"]
+
+            st.markdown(
+                f"""
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                            padding: 1rem; border-radius: 8px; color: white; text-align: center; margin-top: 1rem;">
+                    <h5>🎯 当前方案（{scheme}）防冰总功率: {total_power:.1f} W ({total_power / 1000:.2f} kW)</h5>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # ========== 分区设计示意图（根据编辑后的宽度绘制） ==========
+            st.markdown("##### 🛩️ 主机翼防冰分区设计示意图")
+            zone_colors_dict = {
+                "A": "#FF1493", "B": "#90EE90", "C": "#48D1CC", "D": "#9370DB", "E": "#800080"
+            }
+
+            fig_zones = go.Figure()
+            # 固定从上到下的顺序：E, D, A, B, C （绘制顺序从下往上，但视觉上C在最上）
+            fixed_order = ["E", "D", "A", "B", "C"]
+            zone_heights = []
+            for zone in fixed_order:
+                width = st.session_state.edited_widths[key].get(zone, 0)
+                if width > 0:
+                    zone_heights.append((zone, width))
+
+            if not zone_heights:
+                zone_heights = [("C", 50), ("B", 40), ("A", 30), ("D", 20), ("E", 10)]
+
+            current_y = 0
+            for i, (zone, width_mm) in enumerate(zone_heights):
+                height = width_mm * 1.5
+                y_start = current_y
+                y_end = current_y + height
+
+                if zone == "A":
+                    label = f"{zone}区：前缘防冰区域"
+                elif zone in ["B", "C"]:
+                    label = f"{zone}区-上翼面防冰区域"
+                else:
+                    label = f"{zone}区-下翼面防冰区域"
+
+                fig_zones.add_trace(go.Scatter(
+                    x=[0.3, 0.8, 0.8, 0.3, 0.3],
+                    y=[y_start, y_start, y_end, y_end, y_start],
+                    fill="toself",
+                    fillcolor=zone_colors_dict.get(zone, "#888888"),
+                    opacity=0.85,
+                    line=dict(color="DarkGray", width=1),
+                    mode="lines",
+                    showlegend=False,
+                ))
+                fig_zones.add_annotation(
+                    x=0.55,
+                    y=(y_start + y_end) / 2,
+                    text=label,
+                    showarrow=False,
+                    font=dict(size=11, color="black", weight="bold"),
+                )
+
+                # 右侧宽度标注
+                arrow_x = 0.82
+                mid_y = (y_start + y_end) / 2
+                fig_zones.add_shape(type="line", x0=arrow_x - 0.018, y0=y_start, x1=arrow_x + 0.01, y1=y_start,
+                                    line=dict(color="#333", width=1))
+                fig_zones.add_shape(type="line", x0=arrow_x - 0.018, y0=y_end, x1=arrow_x + 0.01, y1=y_end,
+                                    line=dict(color="#333", width=1))
+                fig_zones.add_shape(type="line", x0=arrow_x, y0=y_start, x1=arrow_x, y1=y_end,
+                                    line=dict(color="#333", width=1))
+                fig_zones.add_annotation(
+                    x=arrow_x, y=mid_y,
+                    text=f"{round(width_mm)}mm",
+                    showarrow=False,
+                    font=dict(size=10, color="#333"),
+                    bgcolor="white",
+                )
+                current_y = y_end
+
+            total_height = current_y
+            zone_total_mm = sum(w for _, w in zone_heights)
+            wing_span_mm = int(params["wing_span"] * 1000)
+
+            # 左侧总高度标注
+            left_x = 0.28
+            fig_zones.add_shape(type="line", x0=left_x - 0.015, y0=0, x1=left_x + 0.015, y1=0,
+                                line=dict(color="#333", width=1))
+            fig_zones.add_shape(type="line", x0=left_x - 0.015, y0=total_height, x1=left_x + 0.015, y1=total_height,
+                                line=dict(color="#333", width=1))
+            fig_zones.add_shape(type="line", x0=left_x, y0=0, x1=left_x, y1=total_height,
+                                line=dict(color="#333", width=1))
+            fig_zones.add_annotation(x=left_x, y=total_height / 2, text=f"{round(zone_total_mm)}mm",
+                                     showarrow=False, font=dict(size=10, color="#333"), bgcolor="white")
+
+            # 底部翼展标注
+            fig_zones.add_shape(type="line", x0=0.3, y0=-5.5, x1=0.8, y1=-5.5, line=dict(color="#333", width=1))
+            fig_zones.add_annotation(x=0.55, y=-5.1, text=f"{wing_span_mm}mm",
+                                     showarrow=False, font=dict(size=12, color="#333"), bgcolor="white")
+
+            fig_zones.update_layout(
+                title=f"主机翼防冰分区设计示意图（{scheme}）",
+                height=max(550, total_height + 180),
+                showlegend=False,
+                xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, showline=False, range=[0.15, 0.95]),
+                yaxis=dict(showticklabels=False, showgrid=False, zeroline=False, showline=False,
+                           range=[-10, total_height + 25]),
+                plot_bgcolor="white",
+                margin=dict(l=20, r=20, t=80, b=100),
+            )
+            st.plotly_chart(fig_zones, use_container_width=True)
+
+            st.markdown("##### 📥 下载结果")
+
+            wb = create_excel_output(
+                results["upper_calc"],
+                results["lower_calc"],
+                params["V_inf"],
+                params["T_inf"],
+                params["T_wall"],
+                params["H_alt"],
+                params["LWC"],
+            )
+
+            excel_buffer = io.BytesIO()
+            wb.save(excel_buffer)
+            excel_buffer.seek(0)
+
+            col_d1, col_d2 = st.columns(2)
+
+            with col_d1:
+                st.download_button(
+                    label="📊 下载完整 Excel 报告",
+                    data=excel_buffer,
+                    file_name=f"防冰热载荷计算_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            with col_d2:
+                csv_buffer = io.StringIO()
+                hydro_df.to_csv(csv_buffer, index=False)
+                csv_data = csv_buffer.getvalue()
+
+                st.download_button(
+                    label="📋 下载疏水数据 (CSV)",
+                    data=csv_data,
+                    file_name=f"疏水热流数据_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+            with st.expander("📊 详细统计信息"):
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.write("**疏水表面统计**")
+                    if len(hydro_df) > 0:
+                        st.dataframe(hydro_df.describe().round(4), use_container_width=True)
+
+                with col2:
+                    st.write("**不疏水表面统计**")
+                    if len(non_hydro_df) > 0:
+                        st.dataframe(
+                            non_hydro_df.describe().round(4), use_container_width=True
+                        )
+
+            # 保存分区方案（供设计工具使用）
+            st.markdown("---")
+            st.markdown("##### 💾 保存分区方案（供设计工具使用）")
+            st.info("您可以编辑上方的分区宽度后，将当前方案保存，供后续设计工具使用。")
+
+            col_save1, col_save2 = st.columns([3, 1])
+            with col_save1:
+                scheme_name = st.text_input(
+                    "方案名称",
+                    value=f"方案_{len(load_schemes()) + 1}",
+                    key="scheme_name_input"
+                )
+            with col_save2:
+                if st.button("保存当前方案", type="primary"):
+                    key = "hydro" if scheme == "疏水方案" else "non_hydro"
+                    widths = st.session_state.edited_widths[key].copy()
+                    for zone in ["C", "B", "A", "D", "E"]:
+                        if zone not in widths:
+                            widths[zone] = 0
+                    scheme_data = {
+                        "name": scheme_name,
+                        "wing_span": params["wing_span"],
+                        "widths": widths,
+                        "scheme_type": scheme,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    filepath = save_scheme_to_file(scheme_data)
+                    st.toast(f"✅ 方案「{scheme_name}」已保存", icon="💾")
 
     elif mode == "分区设计工具":
+        # 强制页面滚动到顶部
+        st.components.v1.html(
+            """
+            <script>
+                window.scrollTo(0, 0);
+            </script>
+            """,
+            height=0,
+        )
         st.markdown("##### ✏️ 主机翼分区设计工具")
         st.info("选择之前保存的分区方案，并配置电偶等参数，生成设计图纸。")
 
